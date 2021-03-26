@@ -32,6 +32,7 @@ try {
 } catch (e) {}
 // if they are supported, setup the optional params
 // IMPORTANT: FALSE doubles as the default CAPTURE value!
+// 检测passive支不支持，降级 滚动优化的 无伤大雅
 const passiveEvent = passiveEventSupported
   ? { capture: false, passive: true }
   : false;
@@ -146,6 +147,9 @@ const checkNormalVisible = function checkNormalVisible(component) {
  *
  * @param  {React} component   React component that respond to scroll and resize
  */
+/*
+  核心逻辑
+*/
 const checkVisible = function checkVisible(component) {
   const node = component.ref;
   if (!(node instanceof HTMLElement)) {
@@ -163,6 +167,7 @@ const checkVisible = function checkVisible(component) {
     : checkNormalVisible(component);
   if (visible) {
     // Avoid extra render if previously is visible
+    // 之前不可见 现在可见 就重新forceUpdate
     if (!component.visible) {
       if (component.props.once) {
         pending.push(component);
@@ -172,6 +177,8 @@ const checkVisible = function checkVisible(component) {
       component.forceUpdate();
     }
   } else if (!(component.props.once && component.visible)) {
+    // 不可见就记录一下 unmountIfInvisible 重新forceUpdate
+    // 塞了个visible的变量在组件实例上
     component.visible = false;
     if (component.props.unmountIfInvisible) {
       component.forceUpdate();
@@ -180,7 +187,9 @@ const checkVisible = function checkVisible(component) {
 };
 
 const purgePending = function purgePending() {
+  // pending存的是once的组件
   pending.forEach(component => {
+    // 把once的组件清除掉
     const index = listeners.indexOf(component);
     if (index !== -1) {
       listeners.splice(index, 1);
@@ -229,24 +238,35 @@ class LazyLoad extends Component {
   componentDidMount() {
     // It's unlikely to change delay type on the fly, this is mainly
     // designed for tests
+    // 默认滚动窗口为window
     let scrollport = window;
     const { scrollContainer } = this.props;
+    /*
+      如果传了scrollContainer的props且是字符串的话
+      就会调document.querySelector取得对应的dom再赋值给滚动窗口
+    */
     if (scrollContainer) {
       if (isString(scrollContainer)) {
         scrollport = scrollport.document.querySelector(scrollContainer);
       }
     }
+    // ？？好像肯定是false啊 delayType一直是undefined
+    // => 确保全局只有一个lazyload的组件在监听这些事件，弄了一些全局变量，
     const needResetFinalLazyLoadHandler =
       (this.props.debounce !== undefined && delayType === 'throttle') ||
       (delayType === 'debounce' && this.props.debounce === undefined);
 
+    // 有别的监听事件，清空事件，重置标志位 finalLazyLoadHandler
     if (needResetFinalLazyLoadHandler) {
       off(scrollport, 'scroll', finalLazyLoadHandler, passiveEvent);
       off(window, 'resize', finalLazyLoadHandler, passiveEvent);
       finalLazyLoadHandler = null;
     }
 
+    // 没有别的监听
     if (!finalLazyLoadHandler) {
+      // debounce 和 throttle取一中之一 赋值
+      // 都传的话 根据代码顺序throttle会覆盖debounce
       if (this.props.debounce !== undefined) {
         finalLazyLoadHandler = debounce(
           lazyLoadHandler,
@@ -260,6 +280,7 @@ class LazyLoad extends Component {
         );
         delayType = 'throttle';
       } else {
+        // 默认的事件处理
         finalLazyLoadHandler = lazyLoadHandler;
       }
     }
@@ -276,15 +297,16 @@ class LazyLoad extends Component {
     } else if (listeners.length === 0 || needResetFinalLazyLoadHandler) {
       const { scroll, resize } = this.props;
 
-      if (scroll) {
+      if (scroll) { // 默认要监听滚动
         on(scrollport, 'scroll', finalLazyLoadHandler, passiveEvent);
       }
 
-      if (resize) {
+      if (resize) { // 默认不监听window的resize 估计是因为性能考虑吧且场景不多
         on(window, 'resize', finalLazyLoadHandler, passiveEvent);
       }
     }
 
+    // listeners存的是组件的实例
     listeners.push(this);
     checkVisible(this);
   }
@@ -345,6 +367,7 @@ class LazyLoad extends Component {
         ) : placeholder ? (
           placeholder
         ) : (
+          // 初始化不可见的时候留一个占位符让这里更好的算高度
           <div
             style={{ height: height }}
             className={`${classNamePrefix}-placeholder`}
@@ -390,6 +413,7 @@ LazyLoad.defaultProps = {
 const getDisplayName = WrappedComponent =>
   WrappedComponent.displayName || WrappedComponent.name || 'Component';
 
+// 一个装饰器 其实也就是在传入的组件 套入一个LazyLoad的壳子 核心逻辑还是LazyLoad的东西
 const decorator = (options = {}) =>
   function lazyload(WrappedComponent) {
     return class LazyLoadDecorated extends Component {
@@ -410,5 +434,7 @@ const decorator = (options = {}) =>
 
 export { decorator as lazyload };
 export default LazyLoad;
+// 检查listeners然后走checkVisible的逻辑
 export { lazyLoadHandler as forceCheck };
+// 强制把listeners的visible设为false，并且调用组件的forceUpdate方法
 export { forceVisible };
